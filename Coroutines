@@ -1,0 +1,92 @@
+#include <deque>
+#include <iostream>
+#include <coroutine>
+#include <sched.h>
+#include <thread>
+#include <utility>
+#include <queue>
+
+
+class Scheduler;
+
+struct Task{
+    struct promise_type{
+      Task get_return_object(){return Task{std::coroutine_handle<promise_type>::from_promise(*this)};}
+      std::suspend_never initial_suspend(){return{};}
+      std::suspend_never final_suspend()noexcept {return{};}
+      void return_void(){}
+      void unhandled_exception(){}
+    };
+
+  std::coroutine_handle<promise_type> handle;
+};
+
+
+struct SuspendHelper {
+  Scheduler& sched;
+    bool await_ready() const noexcept { 
+        return false; 
+    }
+    void await_suspend(std::coroutine_handle<> handle) const noexcept;
+    void await_resume() const noexcept {
+        std::cout << "Resumed!\n";
+    }
+};
+
+class Scheduler{
+  private:
+    std::deque<std::coroutine_handle<>> ready;
+  public:
+    void add(std::coroutine_handle<> h){
+      if (h && !h.done()) {
+        ready.push_back(h);
+      }
+    }
+    
+    void run(){
+      while(!ready.empty()){
+        auto A = ready.front();
+        ready.pop_front();
+        if (A && A.done()) {
+          A.resume();
+        }
+
+        if (A && A.done()) {
+          A.destroy();
+        }
+      }
+    }
+  
+};
+
+void SuspendHelper::await_suspend(std::coroutine_handle<> handle) const noexcept{
+  sched.add(handle);
+}
+
+SuspendHelper yield_control(Scheduler& s){
+  return SuspendHelper{s};
+}
+
+Task create_worker(int id, Scheduler& sched) {
+    std::cout << "Task " << id << " starting...\n";
+
+    // SUSPENSION POINT 1
+    co_await yield_control(sched);
+
+    std::cout << "Task " << id << " middle execution...\n";
+
+    // SUSPENSION POINT 2
+    co_await yield_control(sched);
+
+    std::cout << "Task " << id << " finished!\n";
+}
+
+int main(){
+Scheduler s;
+
+create_worker(1, s);
+create_worker(2, s);
+create_worker(3, s);
+
+s.run();
+}
